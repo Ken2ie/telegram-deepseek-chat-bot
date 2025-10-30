@@ -26,6 +26,26 @@ class TelegramBotService {
         }
       });
 
+      // Ensure webhook is cleared when using polling to avoid conflicts
+      // Fire and forget; do not block startup
+      this.bot.deleteWebHook().catch((err) => {
+        logger.warn('Failed to delete webhook before starting polling (continuing):', err.message || err);
+      });
+
+      // Validate token early and log bot identity (non-fatal)
+      this.bot.getMe()
+        .then((me) => {
+          logger.info(`Bot authorized as @${me.username} (id: ${me.id})`);
+        })
+        .catch((err) => {
+          const status = err && err.response && err.response.statusCode;
+          if (status === 401 || (err.response && err.response.body && err.response.body.error_code === 401)) {
+            logger.error('Telegram returned 401 Unauthorized. Your TELEGRAM_BOT_TOKEN is invalid or revoked. Rotate it in @BotFather and update the Render env var.');
+          } else {
+            logger.warn('Could not fetch bot info with getMe (continuing):', err.message || err);
+          }
+        });
+
       // Set up event listeners
       this.setupEventListeners();
       
@@ -44,7 +64,12 @@ class TelegramBotService {
   setupEventListeners() {
     // Bot ready event
     this.bot.on('polling_error', (error) => {
-      logger.error('Polling error:', error);
+      const status = error && error.response && error.response.statusCode;
+      if (status === 401 || (error.response && error.response.body && error.response.body.error_code === 401)) {
+        logger.error('Polling error 401: Invalid Telegram bot token. Rotate token via @BotFather and update TELEGRAM_BOT_TOKEN in your environment.');
+      } else {
+        logger.error('Polling error:', error);
+      }
     });
 
     // Callback query event
