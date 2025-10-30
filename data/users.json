@@ -1,0 +1,26 @@
+[
+  {
+    "id": "id_1761677087463_8q45otv4u",
+    "telegramId": 2130886886,
+    "firstName": "User",
+    "lastName": "",
+    "username": null,
+    "email": null,
+    "phone": "required",
+    "preferredContact": "phone",
+    "createdAt": "2025-10-28T18:44:47.463Z",
+    "updatedAt": "2025-10-28T19:09:44.511Z"
+  },
+  {
+    "id": "id_1761677735383_zoksjvoud",
+    "telegramId": 8481716528,
+    "firstName": "Mimi",
+    "lastName": "",
+    "username": null,
+    "email": null,
+    "phone": null,
+    "preferredContact": "phone",
+    "createdAt": "2025-10-28T18:55:35.383Z",
+    "updatedAt": "2025-10-28T18:56:59.371Z"
+  }
+]
