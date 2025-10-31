@@ -1,6 +1,7 @@
 const config = require('../config');
 const logger = require('../utils/logger');
 const database = require('./database');
+const contextRetriever = require('./contextRetriever');
 
 class AIFunctionCallingSystem {
   constructor() {
@@ -246,6 +247,65 @@ class AIFunctionCallingSystem {
         properties: {}
       }
     });
+
+    // Context retrieval functions (MCP-like interface)
+    
+    // Get user context
+    this.functions.set('get_user_context', {
+      name: 'get_user_context',
+      description: 'Retrieve user context including profile, bookings, and conversation history. Use this to understand who the user is, their previous bookings, and conversation history before responding.',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    });
+
+    // Get conversation history
+    this.functions.set('get_conversation_history', {
+      name: 'get_conversation_history',
+      description: 'Retrieve recent conversation history with the user. Use this to understand what was discussed previously and provide context-aware responses.',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: {
+            type: 'number',
+            description: 'Maximum number of messages to retrieve (default: 20)',
+            default: 20
+          }
+        }
+      }
+    });
+
+    // Search user messages
+    this.functions.set('search_user_messages', {
+      name: 'search_user_messages',
+      description: 'Search previous messages from the user to find specific information or topics discussed. Use this when you need to recall specific details from past conversations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query to find in previous messages'
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results to return (default: 5)',
+            default: 5
+          }
+        },
+        required: ['query']
+      }
+    });
+
+    // Get user profile
+    this.functions.set('get_user_profile', {
+      name: 'get_user_profile',
+      description: 'Retrieve user profile information including name, contact details, and preferences. Use this when you need to know user details or check if information is already collected.',
+      parameters: {
+        type: 'object',
+        properties: {}
+      }
+    });
   }
 
   async executeFunction(functionName, parameters, userId, conversationService) {
@@ -295,6 +355,18 @@ class AIFunctionCallingSystem {
         
         case 'show_user_bookings':
           return await this.handleShowUserBookings(userId, conversationService);
+        
+        case 'get_user_context':
+          return await this.handleGetUserContext(userId);
+        
+        case 'get_conversation_history':
+          return await this.handleGetConversationHistory(userId, parameters);
+        
+        case 'search_user_messages':
+          return await this.handleSearchUserMessages(userId, parameters);
+        
+        case 'get_user_profile':
+          return await this.handleGetUserProfile(userId);
         
         default:
           throw new Error(`Unknown function: ${functionName}`);
@@ -690,6 +762,150 @@ You'll receive a confirmation message shortly. Thank you for choosing Axis Point
       next_action: 'show_services_menu',
       data: { callsCount: calls.length, appointmentsCount: appointments.length }
     };
+  }
+
+  // Context retrieval handlers
+  async handleGetUserContext(userId) {
+    try {
+      const context = await contextRetriever.getUserContext(userId);
+      
+      if (!context) {
+        return {
+          success: true,
+          message: 'No user context found. This appears to be a new user.',
+          data: { context: null }
+        };
+      }
+
+      const formatted = contextRetriever.formatUserContextForAI(context);
+      
+      return {
+        success: true,
+        message: `User context retrieved. ${context.profile?.firstName ? `User is ${context.profile.firstName}.` : 'User name not yet collected.'} ${context.bookings?.total > 0 ? `User has ${context.bookings.total} previous booking(s).` : 'User has no previous bookings.'}`,
+        data: { context, formatted },
+        formattedContext: formatted
+      };
+    } catch (error) {
+      logger.error(`Error in handleGetUserContext for ${userId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        message: 'Unable to retrieve user context.'
+      };
+    }
+  }
+
+  async handleGetConversationHistory(userId, parameters) {
+    try {
+      const limit = parameters?.limit || 20;
+      const history = contextRetriever.getConversationHistory(userId, null, limit);
+      const formatted = contextRetriever.formatConversationHistory(history);
+      
+      if (history.length === 0) {
+        return {
+          success: true,
+          message: 'No conversation history found. This is the start of the conversation.',
+          data: { history: [], formatted }
+        };
+      }
+
+      return {
+        success: true,
+        message: `Retrieved ${history.length} previous message(s) from conversation history.`,
+        data: { history, formatted },
+        formattedHistory: formatted
+      };
+    } catch (error) {
+      logger.error(`Error in handleGetConversationHistory for ${userId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        message: 'Unable to retrieve conversation history.'
+      };
+    }
+  }
+
+  async handleSearchUserMessages(userId, parameters) {
+    try {
+      const { query, limit = 5 } = parameters;
+      
+      if (!query) {
+        return {
+          success: false,
+          message: 'Search query is required.'
+        };
+      }
+
+      const results = contextRetriever.searchMessages(userId, query, limit);
+      
+      if (results.length === 0) {
+        return {
+          success: true,
+          message: `No messages found matching "${query}".`,
+          data: { results: [], query }
+        };
+      }
+
+      const formatted = results.map(r => `${r.role}: ${r.text} (${r.timestamp})`).join('\n');
+      
+      return {
+        success: true,
+        message: `Found ${results.length} message(s) matching "${query}".`,
+        data: { results, query, formatted }
+      };
+    } catch (error) {
+      logger.error(`Error in handleSearchUserMessages for ${userId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        message: 'Unable to search user messages.'
+      };
+    }
+  }
+
+  async handleGetUserProfile(userId) {
+    try {
+      const profile = contextRetriever.getUserProfile(userId);
+      const dbUser = await database.getUser(userId);
+      
+      // Merge profile data
+      const mergedProfile = {
+        ...profile,
+        firstName: dbUser?.firstName || profile?.firstName,
+        lastName: dbUser?.lastName || profile?.lastName,
+        phone: dbUser?.phone || profile?.phone,
+        email: dbUser?.email || profile?.email,
+        preferredContact: dbUser?.preferredContact || profile?.preferredContact
+      };
+
+      const hasName = !!(mergedProfile.firstName || mergedProfile.name);
+      const hasContact = !!(mergedProfile.phone || mergedProfile.email);
+
+      let message = 'User profile retrieved. ';
+      if (hasName) {
+        message += `Name: ${mergedProfile.firstName || mergedProfile.name}${mergedProfile.lastName ? ` ${mergedProfile.lastName}` : ''}. `;
+      } else {
+        message += 'Name not yet collected. ';
+      }
+      if (hasContact) {
+        message += `Contact: ${mergedProfile.phone || mergedProfile.email || 'Not provided'}.`;
+      } else {
+        message += 'Contact information not yet collected.';
+      }
+
+      return {
+        success: true,
+        message,
+        data: { profile: mergedProfile, hasName, hasContact }
+      };
+    } catch (error) {
+      logger.error(`Error in handleGetUserProfile for ${userId}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        message: 'Unable to retrieve user profile.'
+      };
+    }
   }
 
   getAvailableFunctions() {

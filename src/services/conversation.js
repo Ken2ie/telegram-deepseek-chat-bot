@@ -2,6 +2,8 @@ const CONSTANTS = require('../config/constants');
 const logger = require('../utils/logger');
 const deepseekService = require('./deepseek');
 const database = require('./database');
+const contextRetriever = require('./contextRetriever');
+const store = require('../storage/jsonStore');
 
 // In-memory storage for conversations (in production, use a database)
 const conversations = new Map();
@@ -9,6 +11,9 @@ const conversations = new Map();
 class ConversationService {
   async initializeConversation(userId, userInfo) {
     try {
+      // Try to get existing user context first
+      const existingContext = await contextRetriever.getUserContext(userId);
+      
       const conversation = {
         userId: userId,
         chatId: userInfo.chatId,
@@ -30,6 +35,15 @@ class ConversationService {
       };
 
       conversations.set(userId, conversation);
+      
+      // Store user profile in unified storage
+      if (userInfo.firstName) {
+        store.upsertUserProfile(userId, {
+          firstName: userInfo.firstName,
+          lastName: userInfo.lastName || '',
+          username: userInfo.username || null
+        });
+      }
       
       logger.botActivity(userId, 'conversation_initialized', {
         chatId: userInfo.chatId,
@@ -66,6 +80,26 @@ class ConversationService {
       });
 
       conversations.set(userId, conversation);
+      
+      // Sync updates to unified storage if relevant
+      if (updates.firstName || updates.lastName) {
+        store.upsertUserProfile(userId, {
+          firstName: updates.firstName || conversation.firstName,
+          lastName: updates.lastName || conversation.lastName
+        });
+      }
+      
+      if (updates.contactNumber || updates.phone) {
+        store.upsertUserProfile(userId, {
+          phone: updates.contactNumber || updates.phone
+        });
+      }
+      
+      if (updates.email) {
+        store.upsertUserProfile(userId, {
+          email: updates.email
+        });
+      }
       
       logger.botActivity(userId, 'conversation_updated', {
         state: conversation.state,

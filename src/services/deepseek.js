@@ -1,6 +1,7 @@
 const config = require('../config');
 const logger = require('../utils/logger');
 const aiFunctions = require('./ai-functions');
+const contextRetriever = require('./contextRetriever');
 
 class DeepSeekService {
   constructor() {
@@ -90,19 +91,49 @@ class DeepSeekService {
 
   async generateBotResponse(userMessage, conversationContext = {}, userId = null, conversationService = null) {
     try {
-      const systemPrompt = this.buildSystemPrompt(conversationContext);
+      // Get conversation history and user context for context-aware responses
+      let conversationHistory = [];
+      let userContextData = null;
+      
+      if (userId) {
+        try {
+          // Get recent conversation history (last 15 messages)
+          conversationHistory = contextRetriever.getConversationHistory(userId, null, 15);
+          
+          // Get user context
+          userContextData = await contextRetriever.getUserContext(userId);
+        } catch (error) {
+          logger.warn(`Failed to retrieve context for ${userId}:`, error.message);
+        }
+      }
+
+      const systemPrompt = this.buildSystemPrompt(conversationContext, userContextData, conversationHistory);
       const availableFunctions = aiFunctions.getAvailableFunctions();
       
+      // Build message array with conversation history
       const messages = [
         {
           role: 'system',
           content: systemPrompt
-        },
-        {
-          role: 'user',
-          content: userMessage
         }
       ];
+
+      // Add conversation history if available
+      if (conversationHistory && conversationHistory.length > 0) {
+        // Format conversation history for the AI
+        for (const msg of conversationHistory.slice(-10)) { // Last 10 messages
+          messages.push({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.text || ''
+          });
+        }
+      }
+      
+      // Add current user message
+      messages.push({
+        role: 'user',
+        content: userMessage
+      });
 
       const requestBody = {
         model: this.model,
@@ -227,8 +258,8 @@ class DeepSeekService {
     }
   }
 
-  buildSystemPrompt(conversationContext) {
-    const basePrompt = `You are a professional AI assistant for Axis Point Advisory, a comprehensive advisory service company. You help clients with:
+  buildSystemPrompt(conversationContext, userContextData = null, conversationHistory = []) {
+    let basePrompt = `You are a professional AI assistant for Axis Point Advisory, a comprehensive advisory service company. You help clients with:
 
 1. Finance Advisory (💼) - Financial planning, investment advice, budgeting
 2. Legal Advisory (⚖️) - Legal consultation, document review, compliance
@@ -246,6 +277,10 @@ You have access to functions that allow you to:
 - Confirm bookings
 - Show user's existing bookings
 - Reset conversations
+- Get user context (profile, bookings, conversation history)
+- Get conversation history
+- Search previous messages
+- Get user profile information
 
 CRITICAL BOOKING PROCEDURE:
 When users want to book calls or appointments, follow this EXACT procedure:
@@ -282,9 +317,35 @@ Your role is to:
 - Keep responses concise but informative
 - ALWAYS execute functions instead of giving error messages
 
+CONTEXT-AWARE RESPONSES:
+You should provide context-aware responses by using the context retrieval functions:
+- Use get_user_context() to understand who the user is, their previous bookings, and conversation history
+- Use get_conversation_history() to understand what was discussed previously
+- Use get_user_profile() to check if user information has already been collected
+- Use search_user_messages() to find specific information from past conversations
+- When a user mentions their name or provides information, remember it and use it in future responses
+- Reference previous conversations and bookings when relevant
+
 Current conversation context:`;
 
     let contextInfo = '';
+    
+    // Add user context if available
+    if (userContextData) {
+      const { profile, bookings, conversation } = userContextData;
+      if (profile?.firstName) {
+        contextInfo += `\n- User name: ${profile.firstName}${profile.lastName ? ` ${profile.lastName}` : ''}`;
+      }
+      if (profile?.phone || profile?.email) {
+        contextInfo += `\n- User contact: ${profile.phone || profile.email || 'Not provided'}`;
+      }
+      if (bookings?.total > 0) {
+        contextInfo += `\n- User has ${bookings.total} previous booking(s)`;
+      }
+      if (conversation?.totalMessages > 0) {
+        contextInfo += `\n- Conversation history: ${conversation.totalMessages} messages`;
+      }
+    }
     
     if (conversationContext.selectedService) {
       const serviceNames = {
@@ -319,7 +380,11 @@ Current conversation context:`;
       contextInfo += `\n- Current state: ${conversationContext.state}`;
     }
 
-    return basePrompt + contextInfo + '\n\nRespond naturally and use functions when users want to take actions like booking appointments or selecting services. NEVER give error messages - always execute the appropriate function.';
+    if (conversationHistory && conversationHistory.length > 0) {
+      contextInfo += `\n- Recent conversation: ${conversationHistory.length} message(s) available in history`;
+    }
+
+    return basePrompt + contextInfo + '\n\nIMPORTANT: Be context-aware and conversational. Remember user names, reference previous conversations, and use the context retrieval functions to provide personalized responses. Respond naturally and use functions when users want to take actions like booking appointments or selecting services. NEVER give error messages - always execute the appropriate function.';
   }
 
   delay(ms) {
