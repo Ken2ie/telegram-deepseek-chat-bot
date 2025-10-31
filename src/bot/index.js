@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const config = require('../config');
 const logger = require('../utils/logger');
 const handlers = require('./handlers');
+const store = require('../storage/jsonStore');
 
 class TelegramBotService {
   constructor() {
@@ -72,6 +73,20 @@ class TelegramBotService {
       }
     });
 
+    // Persist incoming user messages
+    this.bot.on('message', (msg) => {
+      try {
+        const chatId = msg.chat.id;
+        // Use Telegram chat ID as the canonical identifier for conversations and profile/bookings
+        const userId = chatId;
+        const text = msg.text || '';
+        const timestamp = new Date(msg.date * 1000).toISOString();
+        store.appendMessage({ userId, sessionId: chatId, role: 'user', text, timestamp });
+      } catch (err) {
+        logger.warn('Failed to persist incoming message (continuing):', err.message || err);
+      }
+    });
+
     // Callback query event
     this.bot.on('callback_query', (callbackQuery) => {
       logger.botActivity(callbackQuery.from.id, 'callback_query', {
@@ -98,6 +113,15 @@ class TelegramBotService {
         messageId: message.message_id,
         text: text.substring(0, 100) + (text.length > 100 ? '...' : '')
       });
+
+      // Persist bot response
+      try {
+        const userId = chatId;
+        const timestamp = new Date(message.date * 1000).toISOString();
+        store.appendMessage({ userId, sessionId: chatId, role: 'assistant', text, timestamp });
+      } catch (persistErr) {
+        logger.warn('Failed to persist bot response (continuing):', persistErr.message || persistErr);
+      }
       
       return message;
     } catch (error) {
@@ -161,6 +185,32 @@ class TelegramBotService {
       logger.error('Failed to get bot info:', error);
       throw error;
     }
+  }
+
+  // Retrieve recent conversation context for a chat/session
+  getRecentContext(chatId, limit = 20) {
+    try {
+      return store.getConversation({ userId: chatId, sessionId: chatId, limit });
+    } catch (error) {
+      logger.warn('Failed to load recent context:', error.message || error);
+      return [];
+    }
+  }
+
+  // User profile helpers
+  upsertUserProfile(userId, profileUpdates) {
+    return store.upsertUserProfile(userId, profileUpdates);
+  }
+  getUserProfile(userId) {
+    return store.getUserProfile(userId);
+  }
+
+  // Booking helpers
+  addBooking(userId, booking) {
+    return store.addBooking(userId, booking);
+  }
+  getBookings(userId) {
+    return store.getBookings(userId);
   }
 
   // Stop bot
